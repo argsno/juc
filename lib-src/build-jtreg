@@ -1,0 +1,154 @@
+#!/bin/bash
+# Builds jar files to run jtreg for jsr166 CVS.
+#
+# Leverages the hard work done by Ubuntu and Maven packagers
+
+set -eux
+
+declare -a MAKE_FLAGS=() DOWNLOADED_MAVEN_JARS=()
+
+die() { printf "%s: $1\n" "$0" "${@:2}" >&2; exit 2; }
+
+def_make_var() {
+  typeset -n varref="$1"
+  varref="$2"
+  MAKE_FLAGS+=("$1=$2")
+}
+
+def_make_file() {
+  [[ -f "$2" ]] || die "%s: no such file" "$2"
+  def_make_var "$@"
+}
+
+def_make_dir() {
+  [[ -d "$2" ]] || die "%s: no such directory" "$2"
+  def_make_var "$@"
+}
+
+download_ubuntu() {
+  local -r pkg="$1"
+  wget -q "http://us.archive.ubuntu.com/ubuntu/pool/universe/${pkg:0:1}/${pkg}"
+}
+
+download_maven_jar() {
+  local -r groupId="$1" artifactId="$2" version="$3"
+  local -r jarfile="${artifactId}-${version}.jar"
+  wget -qO"/tmp/$jarfile" \
+    "http://search.maven.org/remotecontent?filepath=${groupId}/${artifactId}/${version}/${jarfile}"
+  def_make_file "${artifactId^^}_JAR" "/tmp/$jarfile"
+  DOWNLOADED_MAVEN_JARS+=("/tmp/$jarfile")
+}
+
+main() {
+  [[ "$PWD" =~ /lib-src$ ]] || { echo Always run as ./build-jtreg; exit 1; }
+  TESTNG_VERSION="6.9.9"
+  rm -rf "/tmp/testng-$TESTNG_VERSION"*; mkdir "/tmp/testng-$TESTNG_VERSION"
+  def_make_dir TESTNG_HOME "/tmp/testng-$TESTNG_VERSION"
+
+  # Download a mostly unused testng distribution, because jtreg's
+  # makefiles want both TESTNG_JAR and TESTNG_HOME.
+  # https://github.com/cbeust/testng/releases
+  rm -rf "/tmp/${TESTNG_VERSION}.tar.gz" "/tmp/${TESTNG_VERSION}"
+  wget -qO"/tmp/testng-${TESTNG_VERSION}.tar.gz" \
+    "https://github.com/cbeust/testng/archive/${TESTNG_VERSION}.tar.gz"
+  (
+    cd /tmp
+    tar xzf "/tmp/testng-${TESTNG_VERSION}.tar.gz"
+    rm -f "/tmp/testng-${TESTNG_VERSION}.tar.gz"
+  )
+
+  download_maven_jar "junit" "junit" "4.10"
+  download_maven_jar "org/testng" "testng" "$TESTNG_VERSION"
+  download_maven_jar "com/beust" "jcommander" "1.72"
+
+  # TODO: Upgrade to jtharness 5.x
+  rm -rf jtharness-4.6; rm -f ./*jtharness*4.6*
+  download_ubuntu "jtharness/jtharness_4.6-1.debian.tar.xz"
+  download_ubuntu "jtharness/jtharness_4.6-1.dsc"
+  download_ubuntu "jtharness/jtharness_4.6.orig.tar.xz"
+  download_ubuntu "jtharness/libjtharness-java_4.6-1_all.deb"
+  tar xJf "jtharness_4.6.orig.tar.xz"
+  def_make_dir JTHARNESS_HOME "$PWD/jtharness-4.6"
+
+  rm -f ./javahelp2*2.0.05*
+  download_ubuntu "javahelp2/javahelp2_2.0.05.ds1-9.debian.tar.xz"
+  download_ubuntu "javahelp2/javahelp2_2.0.05.ds1-9.dsc"
+  download_ubuntu "javahelp2/javahelp2_2.0.05.ds1-9_all.deb"
+  download_ubuntu "javahelp2/javahelp2_2.0.05.ds1.orig.tar.gz"
+
+
+  ## Currently we build jtreg from source, but get its dependencies
+  ## from Ubuntu or Maven Central. Below are past approaches.
+
+#   rm -f ./jtreg_4.2-b03*
+#   download_ubuntu "jtreg/jtreg_4.2-b03-1~16.04.debian.tar.xz"
+#   download_ubuntu "jtreg/jtreg_4.2-b03-1~16.04_all.deb"
+#   download_ubuntu "jtreg/jtreg_4.2-b03-1~16.04.dsc"
+#   download_ubuntu "jtreg/jtreg_4.2-b03.orig.tar.gz"
+
+#   rm -f ./testng*6.9*
+#   download_ubuntu "testng/testng_6.9.5-1.debian.tar.xz"
+#   download_ubuntu "testng/testng_6.9.5-1.dsc"
+#   download_ubuntu "testng/testng_6.9.5-1_all.deb"
+#   download_ubuntu "testng/testng_6.9.5.orig.tar.gz"
+
+#   rm -f ./*jcommander*1.48*
+#   download_ubuntu "jcommander/jcommander_1.48-1.debian.tar.xz"
+#   download_ubuntu "jcommander/jcommander_1.48-1.dsc"
+#   download_ubuntu "jcommander/jcommander_1.48.orig.tar.gz"
+#   download_ubuntu "jcommander/libjcommander-java_1.48-1_all.deb"
+
+#   rm -f ./*junit4*
+#   download_ubuntu "junit4/junit4_4.12-4ubuntu1.debian.tar.xz"
+#   download_ubuntu "junit4/junit4_4.12-4ubuntu1.dsc"
+#   download_ubuntu "junit4/junit4_4.12-4ubuntu1_all.deb"
+#   download_ubuntu "junit4/junit4_4.12.orig.tar.xz"
+
+  rm -rf ./extract
+  mkdir extract
+  for deb in *.deb; do dpkg -x $deb extract; done
+  EXTRACT="$PWD/extract"
+  def_make_file JAVATEST_JAR "$(find $EXTRACT/ -name javatest.jar)"
+  def_make_file JAVAHELP_JAR "$(find $EXTRACT/ -name jh.jar)"
+
+  hg_clone_codetools() {
+    local -r repo="$1" rev="$2"
+    rm -rf "$repo"
+    hg clone -r "$rev" "http://hg.openjdk.java.net/code-tools/${repo}"
+    rm -rf "${repo}/.hg"
+    tar cJf "${repo}.tar.xz" "$repo"
+  }
+
+  # asmtools is optional, but let's build it for completeness.
+  hg_clone_codetools asmtools 7.0-b06
+  rm -rf "asmtools-"*"-build"
+  (cd "asmtools/build" && ant build)
+  def_make_dir ASMTOOLS_HOME "$PWD/asmtools-"*"-build/release"
+
+  def_make_var BUILD_NUMBER "b14"
+  JTREG_REV="jtreg4.2-${BUILD_NUMBER}"
+  hg_clone_codetools jtreg "$JTREG_REV"
+
+  def_make_dir JDK17HOME "$HOME/jdk/jdk7"
+  def_make_dir JDK18HOME "$HOME/jdk/jdk8"
+  def_make_dir JDK19HOME "$HOME/jdk/jdk9"
+
+  def_make_dir ANTHOME "/usr/share/ant"
+
+  make "${MAKE_FLAGS[@]}" -C "jtreg/make" clean images
+
+  cp jtreg/build/images/jtreg/lib/*.jar ../jsr166/lib/.
+
+  # As a side effect, save a general purpose jtreg "distribution".
+  rsync -a jtreg/build/images/jtreg/ "${JTREG_REV#jtreg}/"
+
+  # Clean up intermediate artifacts.
+  # asmtools creates a bogus index.html
+  rm -rf asmtools asmtools-*-build index.html \
+    jtreg extract "${DOWNLOADED_MAVEN_JARS[@]}" \
+    "$JTHARNESS_HOME" "$TESTNG_HOME"
+
+  exit 0
+}
+
+main "$@"

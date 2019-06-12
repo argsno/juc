@@ -1,0 +1,25 @@
+#!/bin/bash
+# Makes a library jar file java 7 compatible
+set -eu
+JAVA8_HOME="$HOME/jdk/jdk8"; export PATH="$JAVA8_HOME/bin:$PATH"
+[[ -d "$JAVA8_HOME/bin" ]] || { echo "where's java8?"; exit 1; }
+
+[[ "$PWD" =~ lib$ && -f jtreg.jar ]] \
+    || { echo "run in lib directory"; exit 1; }
+
+LIB=jtreg
+rm -rf "$LIB"
+mkdir "$LIB"
+(
+    cd "$LIB"
+    jar xf "../$LIB.jar"
+
+    wget -q -O "retrolambda.jar" "http://search.maven.org/remotecontent?filepath=net/orfjackal/retrolambda/retrolambda/2.3.0/retrolambda-2.3.0.jar"
+
+    java \
+	-Dretrolambda.inputDir=. \
+	-Dretrolambda.classpath=../javatest.jar \
+	-jar retrolambda.jar
+    jar cmf META-INF/MANIFEST.MF "../$LIB.jar" .
+)
+rm -rf "$LIB"

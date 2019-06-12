@@ -1,0 +1,2 @@
+This directory contains sources and breadcrumbs to build jar files checked
+in to jsr166/lib, used to run jtreg.  Check ./build-jtreg for gory details.
